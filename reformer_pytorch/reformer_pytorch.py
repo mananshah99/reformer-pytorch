@@ -505,9 +505,13 @@ class Reformer(nn.Module):
         blocks = []
         norm_type = ScaleNorm if use_scale_norm else nn.LayerNorm
 
+        # Add [depth] reversible blocks with attention + (attention / feedforward) components
         for _ in range(depth):
             attn = get_attn()
             parallel_net = get_attn() if twin_attention else get_ff()
+
+            # y_1 = x_1 + attention(x_2)
+            # y_2 = x_2 + feedforward(x_1)
 
             f = WithNorm(norm_type, dim, attn)
             g = WithNorm(norm_type, dim, parallel_net)
@@ -526,6 +530,7 @@ class Reformer(nn.Module):
                 module.set_args(*args, **kwargs)
 
     def forward(self, x, **kwargs):
+        # double the input for the reversible network
         x = torch.cat([x, x], dim = -1)
         self.set_reversible_args(**kwargs)
         x = self.layers(x)
@@ -534,19 +539,31 @@ class Reformer(nn.Module):
 class ReformerLM(nn.Module):
     def __init__(self, num_tokens, dim, depth, max_seq_len, heads = 8, bucket_size = 64, n_hashes = 8, ff_chunks = 100, attn_chunks = None, causal = False, weight_tie = False, lsh_dropout = 0., random_rotations_per_head = False, twin_attention = False, use_scale_norm = False, use_full_attn = False, full_attn_thres = 0, num_mem_kv = 0, emb_dim = None, return_embeddings = False, fixed_position_emb = False, lsh_attn_auto_pad = False):
         super().__init__()
+
+        # 1. Get embeddings
         emb_dim = default(emb_dim, dim)
         self.token_emb = nn.Embedding(num_tokens, emb_dim)
         self.pos_emb = FixedPositionEmbedding(emb_dim) if fixed_position_emb else nn.Embedding(max_seq_len, emb_dim)
+
+        # 2. Projection from embedding dimension to Reformer input dimension
         self.to_model_dim = identity if emb_dim == dim else nn.Linear(emb_dim, dim)
 
+        # 3. Reformer model
         self.reformer = Reformer(dim, depth, max_seq_len, heads = heads, bucket_size = bucket_size, n_hashes = n_hashes, ff_chunks = ff_chunks, attn_chunks = attn_chunks, causal = causal, weight_tie = weight_tie, lsh_dropout = lsh_dropout, random_rotations_per_head = random_rotations_per_head, twin_attention = twin_attention, use_scale_norm = use_scale_norm, use_full_attn = use_full_attn, full_attn_thres = full_attn_thres, num_mem_kv = num_mem_kv, lsh_attn_auto_pad = lsh_attn_auto_pad)
+        
+        # 4. Function to return embeddings / probabilities
         self.to_logits = identity if return_embeddings else nn.Linear(dim, num_tokens)
 
     def forward(self, x, **kwargs):
+
+        # 1. Add position embeddings
         t = torch.arange(x.shape[1], device=x.device)
         x = self.token_emb(x)
         x = x + self.pos_emb(t).type(x.type())
 
+        # 2. Project to model dimension and run Reformer
         x = self.to_model_dim(x)
         x = self.reformer(x, **kwargs)
+
+        # 3. Return embeddings / probabilities
         return self.to_logits(x)
