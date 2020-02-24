@@ -2,7 +2,7 @@ import math
 from torch import nn
 import torch.nn.functional as F
 
-from reformer_pytorch.reformer_pytorch import Reformer, ReformerLM
+from reformer_pytorch.reformer_pytorch import Reformer, ReformerLM, LSHSelfAttention
 
 def pad_to_multiple(tensor, seqlen, multiple, dim=-1):
     m = seqlen / multiple
@@ -15,7 +15,7 @@ def pad_to_multiple(tensor, seqlen, multiple, dim=-1):
 class Autopadder(nn.Module):
     def __init__(self, net):
         super().__init__()
-        assert isinstance(net, (Reformer, ReformerLM)), 'Only accepts Reformer or ReformerLM classes'
+        assert isinstance(net, (LSHSelfAttention, Reformer, ReformerLM)), 'only modules LSHSelfAttention, Reformer, ReformerLM accepted'
         self.net = net
 
         reformer = net.reformer if isinstance(net, ReformerLM) else net
@@ -30,6 +30,7 @@ class Autopadder(nn.Module):
 
         keys = kwargs.get('keys')
         input_mask = kwargs.get('input_mask')
+        input_attn_mask = kwargs.get('input_attn_mask')
 
         k_len = 0 if keys is None else keys.shape[1]
         seqlen = t + m + k_len
@@ -40,6 +41,11 @@ class Autopadder(nn.Module):
             if input_mask is not None:
                 new_mask = F.pad(input_mask, (0, x.shape[1] - input_mask.shape[1]), value=False)
                 kwargs.update(input_mask=new_mask)
+
+            if input_attn_mask is not None:
+                offset = x.shape[1] - input_attn_mask.shape[1]
+                new_mask = F.pad(input_attn_mask, (0, offset, 0, offset), value=False)
+                kwargs.update(input_attn_mask=new_mask)
 
         out = self.net(x, **kwargs)
         return out[:, 0:t]
