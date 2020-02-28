@@ -3,6 +3,7 @@ This script is heavily inspired by the `run_glue.py` script provided by the Hugg
 https://github.com/huggingface/transformers/blob/master/examples/run_glue.py
 '''
 import sys
+
 sys.path.append('../reformer_pytorch')
 
 import argparse
@@ -17,6 +18,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
 from reformer_pytorch import Reformer, ReformerLM
 
@@ -66,6 +68,7 @@ class TrainerGLUE(object):
         self.output_mode = output_modes[self.task]
 
         self.loss_fn = nn.CrossEntropyLoss()
+        self.writer = SummaryWriter()
 
     def set_seed(self):
         random.seed(self.seed)
@@ -196,6 +199,9 @@ class TrainerGLUE(object):
 
                 epoch_iterator.set_description('Iteration %d: [loss = %f]' % (step, loss.item()))
                 train_iterator.set_description('Epoch %d: [avg_loss = %f]' % (epoch_num, tr_loss / float(step + 1)))
+		
+                # tensorboard logging
+                self.writer.add_scalar('loss/train', loss.item(), global_step)
 
                 if (step + 1) % gradient_accumulation_steps == 0:
                     if self.fp16:
@@ -215,6 +221,7 @@ class TrainerGLUE(object):
                         for key, value in results.items():
                             eval_key = f'eval_{key}'
                             logs[eval_key] = value
+                            self.writer.add_scalar(str(key) + '/eval', value, global_step)
 
                         loss_scalar = (tr_loss - logging_loss) / logging_steps
                         learning_rate_scalar = scheduler.get_lr()[0]
@@ -362,27 +369,37 @@ class TrainerGLUE(object):
         )
         return dataset
 
-max_seq_len = 2048
+## -- main --
+
+parser = argparse.ArgumentParser(description='Main GLUE trainer')
+parser.add_argument('--max_seq_len', type=int, default = 2048)
+parser.add_argument('--gpu', action='store_true')
+parser.add_argument('--num_train_epochs', type=int, default = 10)
+parser.add_argument('--tasks', default = None)
+parser.add_argument('--num_eval_steps', type=int, default = 20)
+args = parser.parse_args()
+
+device = torch.device("cuda" if torch.cuda.is_available() and args.gpu else "cpu")
 
 tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
-tokenizer.max_len = max_seq_len
+tokenizer.max_len = args.max_seq_len
 
 model = ReformerLM(
-    dim=8,#512,
-    depth=1,#6,
-    max_seq_len=max_seq_len,
+    dim=512,
+    depth=6,
+    max_seq_len=args.max_seq_len,
     num_tokens=tokenizer.vocab_size,
-    heads=1,#8,
-    bucket_size=8,#64,
+    heads=8,
+    bucket_size=64,
     n_hashes=4,
     ff_chunks=10,
     lsh_dropout=0.1,
     weight_tie=True,
     causal=True
-)#.cuda()
+).to(device)
 
 # training on glue tasks
-for key in processors.keys():
+for key in list(args.tasks.split(',')) if args.tasks is not None else processors.keys():
     task_name = key.lower()
     processor = processors[task_name]()
     output_mode = output_modes[task_name]
@@ -393,14 +410,14 @@ for key in processors.keys():
 
     trainer = TrainerGLUE(
         model=model,
-        max_seq_len=max_seq_len,
+        max_seq_len=args.max_seq_len,
         tokenizer=tokenizer,
         task=key,
-        per_gpu_train_batch_size=2,
-        per_gpu_eval_batch_size=2,
+        per_gpu_train_batch_size=8,
+        per_gpu_eval_batch_size=8,
     )
 
     train_dataset = trainer.load_and_cache_examples(task_name, tokenizer)
     print('Dataset loaded')
-    trainer.train(train_dataset, task_name=task_name, logging_steps=500, num_train_epochs=1)
+    trainer.train(train_dataset, task_name=task_name, logging_steps=args.num_eval_steps, num_train_epochs=args.num_train_epochs)
     print(f'Trained: {task_name}')
