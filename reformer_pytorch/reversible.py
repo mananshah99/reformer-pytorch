@@ -94,9 +94,27 @@ class ReversibleBlock(nn.Module):
 
 class _ReversibleFunction(Function):
     @staticmethod
-    def forward(ctx, x, blocks):
-        for block in blocks:
-            x = block(x)
+    def forward(ctx, x, blocks, recurrence = False):
+        
+        # we introduce recurrence here: f and g will not just use
+        # x_1 and x_2 of this layer but also of the layer before. how do 
+        # we do this? 
+        #
+        #   1) dim --> dim * 2 in the calling functions
+        #   2) replace input with [x, x] at block 0 and subsequently [x_prev, x] so we use
+        #      previous context and the current context
+
+        if recurrence:
+            x_prev = x
+            for idx, block in enumerate(blocks):
+                x_out = block(torch.cat([x_prev, x], dim=-1))
+                # prev = x, x = new
+                x_prev = x
+                x = x_out
+        else:
+            for block in blocks:
+                x = block(x)
+
         ctx.y = x.detach()
         ctx.blocks = blocks
         return x
@@ -109,10 +127,11 @@ class _ReversibleFunction(Function):
         return dy, None
 
 class ReversibleSequence(nn.Module):
-    def __init__(self, blocks, layer_dropout = 0.):
+    def __init__(self, blocks, recurrence = False, layer_dropout = 0.):
         super().__init__()
         self.layer_dropout = layer_dropout
         self.blocks = nn.ModuleList([ReversibleBlock(f=f, g=g) for f, g in blocks])
+        self.recurrence = recurrence
 
     def forward(self, x):
         blocks = self.blocks
@@ -122,4 +141,4 @@ class ReversibleSequence(nn.Module):
             blocks = [block for block, drop in zip(self.blocks, to_drop) if not drop]
             blocks = self.blocks[:1] if len(blocks) == 0 else blocks
 
-        return _ReversibleFunction.apply(x, blocks)
+        return _ReversibleFunction.apply(x, blocks, recurrence = self.recurrence)
