@@ -561,7 +561,7 @@ class Reformer(nn.Module):
         x = self.layers(x)
         return torch.stack(x.chunk(2, dim=-1)).sum(dim=0)
 
-# TODO: fix dimensions so there aren't hacky 2s everywhere (this is due to recurrence via Transformer XL)
+# DONE: fix dimensions so there aren't hacky 2s everywhere (this is due to recurrence via Transformer XL)
 # TODO: figure out how relative positional encoding would work with this kind of setup
 # TODO: run baseline evaluations on these tasks (using full QK attention and LSH attention, turning recurrence on and off)
 # TODO: write up report for the milestone with graphs and stuff

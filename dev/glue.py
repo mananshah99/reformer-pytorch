@@ -372,10 +372,14 @@ class TrainerGLUE(object):
 ## -- main --
 
 parser = argparse.ArgumentParser(description='Main GLUE trainer')
-parser.add_argument('--max_seq_len', type=int, default = 2048)
-parser.add_argument('--gpu', action='store_true')
-parser.add_argument('--num_train_epochs', type=int, default = 10)
 parser.add_argument('--tasks', default = None)
+
+parser.add_argument('--gpu', action='store_true')
+parser.add_argument('--max_seq_len', type=int, default = 2048)
+parser.add_argument('--recurrence', action='store_true')
+parser.add_argument('--lsh_attention', action='store_true')
+
+parser.add_argument('--num_train_epochs', type=int, default = 10)
 parser.add_argument('--num_eval_steps', type=int, default = 20)
 args = parser.parse_args()
 
@@ -385,17 +389,19 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 tokenizer.max_len = args.max_seq_len
 
 model = ReformerLM(
-    dim=512,
-    depth=6,
-    max_seq_len=args.max_seq_len,
-    num_tokens=tokenizer.vocab_size,
-    heads=8,
-    bucket_size=64,
-    n_hashes=4,
-    ff_chunks=10,
-    lsh_dropout=0.1,
-    weight_tie=True,
-    causal=True
+    dim = 512,
+    depth = 6,
+    max_seq_len = args.max_seq_len,
+    num_tokens = tokenizer.vocab_size,
+    heads = 8,
+    bucket_size = 64,
+    n_hashes = 4,
+    ff_chunks = 10,
+    lsh_dropout = 0.1,
+    weight_tie = True,
+    causal = True,
+    recurrence = args.recurrence,
+    use_full_attn = (not args.lsh_attention)
 ).to(device)
 
 # training on glue tasks
