@@ -94,7 +94,7 @@ class ReversibleBlock(nn.Module):
 
 class _ReversibleFunction(Function):
     @staticmethod
-    def forward(ctx, x, blocks, recurrence = False):
+    def forward(ctx, x, blocks, recurrence):
         
         # we introduce recurrence here: f and g will not just use
         # x_1 and x_2 of this layer but also of the layer before. how do 
@@ -141,4 +141,4 @@ class ReversibleSequence(nn.Module):
             blocks = [block for block, drop in zip(self.blocks, to_drop) if not drop]
             blocks = self.blocks[:1] if len(blocks) == 0 else blocks
 
-        return _ReversibleFunction.apply(x, blocks, recurrence = self.recurrence)
+        return _ReversibleFunction.apply(x, blocks, self.recurrence)
