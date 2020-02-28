@@ -578,7 +578,27 @@ class ReformerLM(nn.Module):
         self.to_model_dim = identity if emb_dim == dim else nn.Linear(emb_dim, dim)
 
         # 3. Reformer model
-        self.reformer = Reformer(dim, depth, max_seq_len, recurrence = recurrence, heads = heads, bucket_size = bucket_size, n_hashes = n_hashes, ff_chunks = ff_chunks, attn_chunks = attn_chunks, causal = causal, weight_tie = weight_tie, lsh_dropout = lsh_dropout, layer_dropout = layer_dropout, random_rotations_per_head = random_rotations_per_head, twin_attention = twin_attention, use_scale_norm = use_scale_norm, use_full_attn = use_full_attn, full_attn_thres = full_attn_thres, num_mem_kv = num_mem_kv)
+        self.reformer = Recorder(Reformer(dim, 
+                                          depth, 
+                                          max_seq_len, 
+                                          recurrence = recurrence, 
+                                          heads = heads, 
+                                          bucket_size = bucket_size, 
+                                          n_hashes = n_hashes, 
+                                          ff_chunks = ff_chunks, 
+                                          attn_chunks = attn_chunks, 
+                                          causal = causal, 
+                                          weight_tie = weight_tie, 
+                                          lsh_dropout = lsh_dropout, 
+                                          layer_dropout = layer_dropout, 
+                                          random_rotations_per_head = random_rotations_per_head, 
+                                          twin_attention = twin_attention, 
+                                          use_scale_norm = use_scale_norm, 
+                                          use_full_attn = use_full_attn, 
+                                          full_attn_thres = full_attn_thres, 
+                                          num_mem_kv = num_mem_kv))
+
+        self.reformer.turn_on()
         
         # 4. Function to return embeddings / probabilities
         self.to_logits = identity if return_embeddings else nn.Linear(dim * 2 if recurrence else dim, num_tokens)
@@ -593,6 +613,9 @@ class ReformerLM(nn.Module):
         # 2. Project to model dimension and run Reformer
         x = self.to_model_dim(x)
         x = self.reformer(x, **kwargs)
+
+        attn_weights_and_buckets = x.recordings[0]
+        print(attn_weights_and_buckets)
 
         # 3. Return embeddings / probabilities
         return self.to_logits(x)

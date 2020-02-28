@@ -20,7 +20,8 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm, trange
-from reformer_pytorch import Reformer, ReformerLM
+from reformer_pytorch import Reformer
+from reformer_lm_pytorch import ReformerLM
 
 from transformers import BertTokenizer, AdamW, get_linear_schedule_with_warmup
 from transformers.data.metrics import glue_compute_metrics as compute_metrics
@@ -399,7 +400,7 @@ model = ReformerLM(
     ff_chunks = 10,
     lsh_dropout = 0.1,
     weight_tie = True,
-    causal = True,
+    causal = False,
     recurrence = args.recurrence,
     use_full_attn = (not args.lsh_attention)
 ).to(device)
