@@ -59,7 +59,7 @@ class TrainerGLUE(object):
         self.fp16 = fp16
         self.fp16_opt_level = fp16_opt_level
 
-        self.data_dir = f'{data_dir}/{task}'
+        self.data_dir = str(data_dir) + '/' + str(task)
         self.output_dir = output_dir
 
         self.task = task
