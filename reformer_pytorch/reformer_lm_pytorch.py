@@ -47,7 +47,7 @@ class ReformerLM(nn.Module):
                                   full_attn_thres = full_attn_thres, 
                                   num_mem_kv = num_mem_kv)
 
-        self.reformer.turn_on()
+        #self.reformer.turn_on()
         
         # 4. Function to return embeddings / probabilities
         self.to_logits = identity if return_embeddings else nn.Linear(dim * 2 if recurrence else dim, num_tokens)
@@ -67,6 +67,6 @@ class ReformerLM(nn.Module):
         #print(len(attn_weights_and_buckets))
         #print(attn_weights_and_buckets[0].keys())
         #print([x.shape for x in attn_weights_and_buckets[0].values()])
-        
+
         # 3. Return embeddings / probabilities
         return self.to_logits(x)
