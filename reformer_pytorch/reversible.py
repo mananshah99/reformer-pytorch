@@ -55,9 +55,11 @@ class ReversibleBlock(nn.Module):
         return torch.cat([y1, y2], dim=2)
 
     def backward_pass(self, y, dy):
+        # (y_1, y_2)
         y1, y2 = torch.chunk(y, 2, dim=2)
         del y
 
+        #(y_1bar, y_2bar)
         dy1, dy2 = torch.chunk(dy, 2, dim=2)
         del dy
 
@@ -67,6 +69,7 @@ class ReversibleBlock(nn.Module):
             torch.autograd.backward(gy1, dy2)
 
         with torch.no_grad():
+            # 3. x_2 <- y_2 - g(y_1)
             x2 = y2 - gy1
             del y2, gy1
 
@@ -80,6 +83,7 @@ class ReversibleBlock(nn.Module):
             torch.autograd.backward(fx2, dx1, retain_graph=True)
 
         with torch.no_grad():
+            # 4. x_1 <- z1 - f(x_2)
             x1 = y1 - fx2
             del y1, fx2
 
@@ -105,12 +109,21 @@ class _ReversibleFunction(Function):
         #      previous context and the current context
 
         if recurrence:
+            print(x.shape)
             x_prev = x
+            x_curr = x
             for idx, block in enumerate(blocks):
-                x_out = block(torch.cat([x_prev, x], dim=-1))
+                if idx == 0:
+                    x_curr = block(torch.cat([x_prev, x_curr], dim=-1))
+                else:
+                    x_curr_old = x_curr
+                    x_curr = block(torch.cat([x_prev, x_curr], dim=-1))
+                    x_prev = x_curr
                 # prev = x, x = new
-                x_prev = x
-                x = x_out
+                #x_prev = x
+                #x = x_out
+                print(x_curr.shape)
+                print("HERE")
         else:
             for block in blocks:
                 x = block(x)
@@ -124,7 +137,7 @@ class _ReversibleFunction(Function):
         y = ctx.y
         for block in ctx.blocks[::-1]:
             y, dy = block.backward_pass(y, dy)
-        return dy, None
+        return dy, None, None
 
 class ReversibleSequence(nn.Module):
     def __init__(self, blocks, recurrence = False, layer_dropout = 0.):
