@@ -28,11 +28,16 @@ class GutenbergDataset(Dataset):
 
         self.documents = []
         filename_list = os.listdir(path)
+
+        MAX_DOCUMENTS = 500
+
         for file in filename_list:
             path_to_file = os.path.join(path, file)
             if not os.path.isfile(path_to_file):
                 continue
             self.documents.append(path_to_file)
+
+        self.documents = self.documents[:MAX_DOCUMENTS]
 
     def __len__(self):
         """ Returns the number of documents. """
@@ -279,7 +284,7 @@ class ReformerTrainer(object):
 
                     if global_steps % ckpt_steps == 0:
                         # evaluating before every checkpoint
-                        self.evaluate(eval_dataloader)
+                        # self.evaluate(eval_dataloader)
                         model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
                         torch.save(model_to_save.state_dict(), f'{ckpt_dir}/model_state_dict.pt')
                         torch.save(optimizer.state_dict(), f'{ckpt_dir}/optimizer_state_dict.pt')
@@ -365,7 +370,7 @@ if __name__ == '__main__':
                           train_dataloader=train_dataloader,
                           eval_dataloader=eval_dataloader,
                           log_steps=10,
-                          ckpt_steps=100,
+                          ckpt_steps=2000,
                           ckpt_dir='./pretrain_ckpts',
                           gradient_accumulation_steps=1)
     torch.save(model, './pretrain_ckpts/model.bin')
