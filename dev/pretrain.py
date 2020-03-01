@@ -356,8 +356,11 @@ if __name__ == '__main__':
         dim=512,
         depth=6,
         heads=8,
+        n_hashes=4,
         max_seq_len=tokenizer.max_len,
-        causal=True
+        causal=True,
+        recurrence = True,
+        k_means_hashing = True,
     )
     trainer = ReformerTrainer(dataset, model, tokenizer, train_batch_size=32, eval_batch_size=32)
     train_dataloader, eval_dataloader = trainer.build_dataloaders(train_test_split=0.90)

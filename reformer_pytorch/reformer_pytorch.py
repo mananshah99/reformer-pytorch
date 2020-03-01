@@ -6,6 +6,7 @@ from torch.autograd import Function
 from functools import partial
 from itertools import chain
 from reversible import ReversibleBlock, ReversibleSequence
+import numpy as np
 
 #constants
 
@@ -116,6 +117,9 @@ class SettableArgs(nn.Module):
 
 class LSHAttention(nn.Module):
     def __init__( self,
+                  dim,
+                  heads,
+                  max_seq_len,
                   dropout = 0.,
                   bucket_size = 64,
                   n_hashes = 8,
@@ -125,7 +129,8 @@ class LSHAttention(nn.Module):
                   rehash_each_round = True,
                   drop_for_hash_rate = 0.0,
                   random_rotations_per_head = False,
-                  return_attn = False):
+                  return_attn = False,
+                  k_means_hashing = False):
         super().__init__()
         if dropout >= 1.0:
             raise ValueError('Dropout rates must be lower than 1.')
@@ -138,13 +143,28 @@ class LSHAttention(nn.Module):
             ' is not implemented.')
 
         self.causal = causal
-        self.n_hashes = n_hashes
+        # for k-means, this is the number of different restarts
+        self.n_hashes = 1 if k_means_hashing else n_hashes        
         self.bucket_size = bucket_size
 
         self._allow_duplicate_attention = allow_duplicate_attention
         self._attend_across_buckets = attend_across_buckets
         self._rehash_each_round = rehash_each_round
         self._random_rotations_per_head = random_rotations_per_head
+
+        # for k_means_hashing:
+        self.k_means_hashing = k_means_hashing
+        self.n_heads = heads
+        self.n_km_hashes = n_hashes
+        self.bucket_means = nn.Parameter(
+            torch.zeros(n_hashes,
+                        heads,
+                        max_seq_len // bucket_size,
+                        dim // heads
+                        )
+                        .normal_(0, 1 / np.sqrt(dim)),
+            requires_grad = False
+            )
 
         # will expend extra computation to return attention matrix
         self._return_attn = return_attn
@@ -205,7 +225,43 @@ class LSHAttention(nn.Module):
 
         n_buckets = seqlen // self.bucket_size
 
-        buckets = self.hash_vectors(n_buckets, qk)
+        buckets = None
+        if self.k_means_hashing:
+            qk = qk.view(-1, self.n_heads, seqlen, dim)
+            #print(qk.shape)
+            #print(self.bucket_means.shape)
+
+            # qk shape: batch_size, n_heads, max_seq_len, dim // n_heads
+            # bucket_means shape: n_hashes, n_heads, max_seq_len // bucket_size (n_clusters), dim // n_heads
+            
+            # b = batch_size
+            # h = n_heads
+            # s = seqlen
+            # d = dim // n_heads
+            # q = n_hashes
+            # r = n_clusters
+            projected_vectors = torch.einsum('bhsd,qhrd->qbhsr', qk, self.bucket_means)
+            #print(projected_vectors[0, 0, 0, 0, :])
+            #print(projected_vectors.shape)
+            buckets_per_hash = torch.argmax(projected_vectors, dim=-1)
+            #print(buckets_per_hash[:, 0, 0, 0]) 
+            #print(buckets_per_hash.shape)
+            buckets = torch.mode(buckets_per_hash, dim=0)[0]
+            #print(buckets[0, 0, 0])
+            #print(buckets.shape)
+
+            if self.training:
+                curr_clusters = F.one_hot(buckets_per_hash, projected_vectors.shape[-1]).float()
+                per_cluster_mean = torch.einsum("bhsd,qbhsr->qhrd", qk, curr_clusters)
+                per_cluster_mean = per_cluster_mean.reshape(self.n_km_hashes, self.n_heads, projected_vectors.shape[-1], dim)
+
+                self.bucket_means = nn.Parameter(per_cluster_mean, requires_grad = False)
+
+            buckets = buckets.reshape(batch_size, -1)
+            qk = qk.view(batch_size, seqlen, dim)
+        else:
+            buckets = self.hash_vectors(n_buckets, qk)
+
         # We use the same vector as both a query and a key.
         assert int(buckets.shape[1]) == self.n_hashes * seqlen
 
@@ -420,7 +476,7 @@ class FullQKAttention(nn.Module):
 # Shared qk attention, using either full or LSH attention
 
 class LSHSelfAttention(nn.Module):
-    def __init__(self, dim, heads = 8, bucket_size = 64, n_hashes = 8, causal = False, attn_chunks = None, random_rotations_per_head = False, attend_across_buckets = True, allow_duplicate_attention = True, num_mem_kv = 0, use_full_attn = False, full_attn_thres = None, return_attn = False, **kwargs):
+    def __init__(self, dim, max_seq_len, heads = 8, bucket_size = 64, n_hashes = 8, causal = False, attn_chunks = None, random_rotations_per_head = False, attend_across_buckets = True, allow_duplicate_attention = True, num_mem_kv = 0, use_full_attn = False, full_attn_thres = None, return_attn = False, k_means_hashing = False, **kwargs):
         super().__init__()
         assert dim % heads == 0, 'dimensions must be divisible by number of heads'
 
@@ -433,7 +489,7 @@ class LSHSelfAttention(nn.Module):
         self.to_out = nn.Linear(dim, dim)
 
         self.bucket_size = bucket_size
-        self.lsh_attn = LSHAttention(bucket_size=bucket_size, n_hashes=n_hashes, causal=causal, random_rotations_per_head=random_rotations_per_head, attend_across_buckets = attend_across_buckets,  allow_duplicate_attention = allow_duplicate_attention, return_attn = return_attn, **kwargs)
+        self.lsh_attn = LSHAttention(dim = dim, max_seq_len = max_seq_len, heads = heads, bucket_size=bucket_size, n_hashes=n_hashes, causal=causal, random_rotations_per_head=random_rotations_per_head, attend_across_buckets = attend_across_buckets,  allow_duplicate_attention = allow_duplicate_attention, return_attn = return_attn, k_means_hashing = k_means_hashing, **kwargs)
         self.full_attn = FullQKAttention(causal = causal)
 
         self.use_full_attn = use_full_attn
@@ -508,24 +564,40 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+class FeedForwardTie(nn.Module):
+    def __init__(self, dim_in, dim_out, mult = 4):
+        super().__init__()
+
+        GELU = nn.GELU() if hasattr(nn, 'GELU') else GELU_()
+
+        self.net = nn.Sequential(
+            nn.Linear(dim_in, dim_in * mult),
+            GELU,
+            nn.Linear(dim_in * mult, dim_out))
+
+    def forward(self, x):
+        return self.net(x)
+
 # reformer lm
 
 class Reformer(nn.Module):
-    def __init__(self, dim, depth, max_seq_len, recurrence = False, heads = 8, bucket_size = 64, n_hashes = 8, ff_chunks = 100, attn_chunks = None, causal = False, weight_tie = False, lsh_dropout = 0., layer_dropout = 0., lsh_attend_across_buckets = True, lsh_allow_duplicate_attention = True, random_rotations_per_head = False, twin_attention = False, use_scale_norm = False, use_full_attn = False, full_attn_thres = 0, num_mem_kv = 0):
+    def __init__(self, dim, depth, max_seq_len, recurrence = False, k_means_hashing = False, heads = 8, bucket_size = 64, n_hashes = 8, ff_chunks = 100, attn_chunks = None, causal = False, weight_tie = False, lsh_dropout = 0., layer_dropout = 0., lsh_attend_across_buckets = True, lsh_allow_duplicate_attention = True, random_rotations_per_head = False, twin_attention = False, use_scale_norm = False, use_full_attn = False, full_attn_thres = 0, num_mem_kv = 0):
         super().__init__()
-        self.dim = dim * 2 if recurrence else dim
+        self.dim = dim
         self.depth = depth
 
         self.bucket_size = bucket_size
         self.num_mem_kv = num_mem_kv
         self.full_attn_thres = full_attn_thres
 
-        get_attn = lambda: SettableArgs(LSHSelfAttention(dim * 2 if recurrence else dim, heads, bucket_size, n_hashes, causal = causal, dropout = lsh_dropout, attn_chunks = attn_chunks, allow_duplicate_attention = lsh_allow_duplicate_attention, attend_across_buckets = lsh_attend_across_buckets, random_rotations_per_head = random_rotations_per_head, num_mem_kv = num_mem_kv, use_full_attn = use_full_attn, full_attn_thres = full_attn_thres))
-        get_ff = lambda: FeedForward(dim * 2 if recurrence else dim)
+        get_attn = lambda: SettableArgs(LSHSelfAttention(dim, max_seq_len, heads, bucket_size, n_hashes, causal = causal, dropout = lsh_dropout, attn_chunks = attn_chunks, allow_duplicate_attention = lsh_allow_duplicate_attention, attend_across_buckets = lsh_attend_across_buckets, random_rotations_per_head = random_rotations_per_head, num_mem_kv = num_mem_kv, use_full_attn = use_full_attn, full_attn_thres = full_attn_thres, k_means_hashing = k_means_hashing))
+        get_ff = lambda: FeedForward(dim)
+        get_ff_tie = lambda: FeedForwardTie(dim_in = dim * 2, dim_out = dim)
 
         if weight_tie:
             get_attn = cache_fn(get_attn)
             get_ff = cache_fn(get_ff)
+            get_ff_tie = cache_fn(get_ff_tie)
 
         blocks = []
         norm_type = ScaleNorm if use_scale_norm else nn.LayerNorm
@@ -534,17 +606,19 @@ class Reformer(nn.Module):
         for _ in range(depth):
             attn = get_attn()
             parallel_net = get_attn() if twin_attention else get_ff()
+            ff_tie = get_ff_tie()
 
             # y_1 = x_1 + attention(x_2)
             # y_2 = x_2 + feedforward(x_1)
 
-            f = WithNorm(norm_type, dim * 2 if recurrence else dim, attn)
-            g = WithNorm(norm_type, dim * 2 if recurrence else dim, parallel_net)
+            f = WithNorm(norm_type, dim, attn)
+            g = WithNorm(norm_type, dim, parallel_net)
+            h = WithNorm(norm_type, dim * 2, ff_tie) if recurrence else None
 
             if not twin_attention and ff_chunks > 1:
                 g = Chunk(ff_chunks, g, along_dim = -2)
 
-            blocks.append(nn.ModuleList([f, g]))
+            blocks.append(nn.ModuleList([f, g, h]))
 
         self.layers = ReversibleSequence(nn.ModuleList(blocks), recurrence = recurrence, layer_dropout = layer_dropout)
         self.layer_modules = list(chain(*[m for m in blocks]))
