@@ -15,7 +15,7 @@ from recorder import Recorder
 # TODO: run baseline evaluations on these tasks (using full QK attention and LSH attention, turning recurrence on and off)
 # TODO: write up report for the milestone with graphs and stuff
 class ReformerLM(nn.Module):
-    def __init__(self, num_tokens, dim, depth, max_seq_len, recurrence = False, heads = 8, bucket_size = 64, n_hashes = 4, ff_chunks = 100, attn_chunks = None, causal = False, weight_tie = False, lsh_dropout = 0., layer_dropout = 0., random_rotations_per_head = False, twin_attention = False, use_scale_norm = False, use_full_attn = False, full_attn_thres = 0, num_mem_kv = 0, emb_dim = None, return_embeddings = False, fixed_position_emb = False):
+    def __init__(self, num_tokens, dim, depth, max_seq_len, recurrence = False, k_means_hashing = False, heads = 8, bucket_size = 64, n_hashes = 4, ff_chunks = 100, attn_chunks = None, causal = False, weight_tie = False, lsh_dropout = 0., layer_dropout = 0., random_rotations_per_head = False, twin_attention = False, use_scale_norm = False, use_full_attn = False, full_attn_thres = 0, num_mem_kv = 0, emb_dim = None, return_embeddings = False, fixed_position_emb = False):
         super().__init__()
 
         # 1. Get embeddings
@@ -31,6 +31,7 @@ class ReformerLM(nn.Module):
                                   depth, 
                                   max_seq_len, 
                                   recurrence = recurrence, 
+                                  k_means_hashing = k_means_hashing,
                                   heads = heads, 
                                   bucket_size = bucket_size, 
                                   n_hashes = n_hashes, 
@@ -50,7 +51,7 @@ class ReformerLM(nn.Module):
         #self.reformer.turn_on()
         
         # 4. Function to return embeddings / probabilities
-        self.to_logits = identity if return_embeddings else nn.Linear(dim * 2 if recurrence else dim, num_tokens)
+        self.to_logits = identity if return_embeddings else nn.Linear(dim, num_tokens)
 
     def forward(self, x, **kwargs):
 

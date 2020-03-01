@@ -39,22 +39,27 @@ class Deterministic(nn.Module):
 # heavily inspired by https://github.com/RobinBruegger/RevTorch/blob/master/revtorch/revtorch.py
 # once multi-GPU is confirmed working, refactor and send PR back to source
 class ReversibleBlock(nn.Module):
-    def __init__(self, f, g):
+    def __init__(self, f, g, h = None):
         super().__init__()
         self.f = Deterministic(f)
         self.g = Deterministic(g)
+        self.h = None if h is None else Deterministic(h)
 
     def forward(self, x):
         x1, x2 = torch.chunk(x, 2, dim=2)
         y1, y2 = None, None
 
         with torch.no_grad():
-            y1 = x1 + self.f(x2, record_rng=True)
-            y2 = x2 + self.g(y1, record_rng=True)
+            y1 = x1 + self.f(x2, record_rng=True) if self.h is None else x1 + self.f(x2, record_rng=True) + self.h(torch.cat([x1, x2], dim=-1), record_rng=True)
+            y2 = x2 + self.g(y1, record_rng=True) if self.h is None else x2 + self.g(y1, record_rng=True)
 
         return torch.cat([y1, y2], dim=2)
 
     def backward_pass(self, y, dy):
+        if self.h is None: return self.backward_pass_original(y, dy)
+        else: return self.backward_pass_dev(y, dy)
+    
+    def backward_pass_original(self, y, dy):
         # (y_1, y_2)
         y1, y2 = torch.chunk(y, 2, dim=2)
         del y
@@ -69,7 +74,6 @@ class ReversibleBlock(nn.Module):
             torch.autograd.backward(gy1, dy2)
 
         with torch.no_grad():
-            # 3. x_2 <- y_2 - g(y_1)
             x2 = y2 - gy1
             del y2, gy1
 
@@ -83,9 +87,57 @@ class ReversibleBlock(nn.Module):
             torch.autograd.backward(fx2, dx1, retain_graph=True)
 
         with torch.no_grad():
-            # 4. x_1 <- z1 - f(x_2)
             x1 = y1 - fx2
             del y1, fx2
+
+            dx2 = dy2 + x2.grad
+            del dy2
+            x2.grad = None
+
+            x = torch.cat([x1, x2.detach()], dim=2)
+            dx = torch.cat([dx1, dx2], dim=2)
+
+        return x, dx
+
+    def backward_pass_dev(self, y, dy):
+        # (y_1, y_2)
+        y1, y2 = torch.chunk(y, 2, dim=2)
+        del y
+
+        #(y_1bar, y_2bar)
+        dy1, dy2 = torch.chunk(dy, 2, dim=2)
+        del dy
+
+        with torch.enable_grad():
+            y1.requires_grad = True
+            gy1 = self.g(y1, set_rng=True)
+            torch.autograd.backward(gy1, dy2)
+
+        with torch.no_grad():
+            x2 = y2 - gy1
+            del y2, gy1
+
+            dx1 = dy1 + y1.grad
+            del dy1
+            y1.grad = None
+
+        with torch.enable_grad():
+            x2.requires_grad = True
+            fx2 = self.f(x2, set_rng=True)
+            torch.autograd.backward(fx2, dx1, retain_graph=True)
+
+        with torch.no_grad():
+            x1 = y1 - fx2
+            del y1, fx2
+
+        with torch.enable_grad():
+            x2.requires_grad = True
+
+            ### update to account for h
+            hx2 = self.h(torch.cat([x1, x2], dim=-1), set_rng=True)
+            torch.autograd.backward(hx2, dx1, retain_graph=True)
+
+        with torch.no_grad():
 
             dx2 = dy2 + x2.grad
             del dy2
@@ -99,34 +151,9 @@ class ReversibleBlock(nn.Module):
 class _ReversibleFunction(Function):
     @staticmethod
     def forward(ctx, x, blocks, recurrence):
-        
-        # we introduce recurrence here: f and g will not just use
-        # x_1 and x_2 of this layer but also of the layer before. how do 
-        # we do this? 
-        #
-        #   1) dim --> dim * 2 in the calling functions
-        #   2) replace input with [x, x] at block 0 and subsequently [x_prev, x] so we use
-        #      previous context and the current context
-
-        if recurrence:
-            print(x.shape)
-            x_prev = x
-            x_curr = x
-            for idx, block in enumerate(blocks):
-                if idx == 0:
-                    x_curr = block(torch.cat([x_prev, x_curr], dim=-1))
-                else:
-                    x_curr_old = x_curr
-                    x_curr = block(torch.cat([x_prev, x_curr], dim=-1))
-                    x_prev = x_curr
-                # prev = x, x = new
-                #x_prev = x
-                #x = x_out
-                print(x_curr.shape)
-                print("HERE")
-        else:
-            for block in blocks:
-                x = block(x)
+        # currently, the recurrence parameter is 
+        for block in blocks:
+            x = block(x)
 
         ctx.y = x.detach()
         ctx.blocks = blocks
@@ -143,7 +170,7 @@ class ReversibleSequence(nn.Module):
     def __init__(self, blocks, recurrence = False, layer_dropout = 0.):
         super().__init__()
         self.layer_dropout = layer_dropout
-        self.blocks = nn.ModuleList([ReversibleBlock(f=f, g=g) for f, g in blocks])
+        self.blocks = nn.ModuleList([ReversibleBlock(f=f, g=g, h=h) for f, g, h in blocks])
         self.recurrence = recurrence
 
     def forward(self, x):
