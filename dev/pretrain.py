@@ -330,7 +330,7 @@ class PretrainingWrapper(object):
 
         logging.info(f'{datetime.now()} | Evaluating...')
         for step, batch in tqdm(enumerate(dataloader), desc='Evaluating', leave=True, total=len(dataloader)):
-            for data in batch:
+            for data in tqdm(batch):
                 inputs = self._tokenize_input_ids(data, pad_to_max_length=True)
                 inputs, labels = self.mask_tokens(inputs)
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -353,6 +353,8 @@ class PretrainingWrapper(object):
                 eval_loss += tmp_eval_loss.item()
                 perplexity += tmp_perplexity.item()
                 eval_steps += 1
+
+            if eval_steps == 0: continue
 
             eval_loss /= eval_steps
             perplexity /= eval_steps
@@ -423,7 +425,7 @@ if __name__ == '__main__':
                                  tb_dir = tb_dir_name,
                                  log_dir = log_dir_name)
 
-    train_dataloader, eval_dataloader = wrapper.build_dataloaders(train_test_split=0.90)
+    train_dataloader, eval_dataloader = wrapper.build_dataloaders(train_test_split=0.10)
 
     if args.evaluate:
         wrapper.evaluate(dataloader = eval_dataloader, ckpt_dir = ckpt_dir_name)
