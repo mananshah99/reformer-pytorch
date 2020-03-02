@@ -65,7 +65,7 @@ class GutenbergDataset(Dataset):
         return items
 
 
-class ReformerTrainer(object):
+class PretrainingWrapper(object):
 
     def __init__(self,
                  dataset,
@@ -98,9 +98,6 @@ class ReformerTrainer(object):
         self.eval_batch_size = eval_batch_size
         self.tb_writer = tb_writer
         self.log_dir = log_dir
-
-        if not os.path.exists(log_dir): os.makedirs(log_dir)
-        if not os.path.exists(tb_dir): os.makedirs(tb_dir)
 
         if tokenizer is None:
             self.tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
@@ -219,7 +216,6 @@ class ReformerTrainer(object):
         step_loss = 0.0
 
         if ckpt_dir is not None:
-            if not os.path.exists(ckpt_dir): os.makedirs(ckpt_dir)
             assert os.path.isdir(ckpt_dir)
             try:
                 logging.info(f'{datetime.now()} | Continuing from checkpoint...')
@@ -304,12 +300,24 @@ class ReformerTrainer(object):
 
         return self.model
 
-    def evaluate(self, dataloader):
+    def evaluate(self, dataloader, ckpt_dir = None):
         """
         Runs through the provided dataloader with torch.no_grad()
         :param dataloader: (torch.utils.data.DataLoader) Evaluation DataLoader
         :return: None
         """
+
+        if ckpt_dir is not None:
+            assert os.path.isdir(ckpt_dir)
+            try:
+                logging.info(f'{datetime.now()} | Evaluating from checkpoint...')
+                self.model.load_state_dict(torch.load(f'{ckpt_dir}/model_state_dict.pt', map_location=self.device))
+
+            except Exception as e:
+                logging.info(f'{datetime.now()} | No checkpoint was found | {e}')
+
+        self.model.to(self.device)
+
         loss_fn = nn.CrossEntropyLoss()
 
         if self.n_gpu > 1 and not isinstance(self.model, nn.DataParallel):
@@ -369,6 +377,12 @@ if __name__ == '__main__':
     parser.add_argument('--kmeans', action='store_true')
     parser.add_argument('--full_attention', action='store_true')
 
+    parser.add_argument('--ckpt_dir', type=str, default="")
+    parser.add_argument('--log_dir', type=str, default="")
+    parser.add_argument('--tb_dir', type=str, default="")
+
+    parser.add_argument('--evaluate', action='store_true')
+
     args = parser.parse_args()
 
     dataset = GutenbergDataset(path='../data/gutenberg/txt')
@@ -390,9 +404,9 @@ if __name__ == '__main__':
     )
 
     name = strftime("%a_%d_%b_%H-%M-%S", gmtime())
-    ckpt_dir_name = './pretrain_ckpts/' + name
-    log_dir_name  = './pretrain_logs/' + name
-    tb_dir_name   = './pretrain_logs_tb/' + name
+    ckpt_dir_name = './pretrain_ckpts/' + name      if args.ckpt_dir == "" else args.ckpt_dir
+    log_dir_name  = './pretrain_logs/' + name       if args.log_dir == "" else args.log_dir
+    tb_dir_name   = './pretrain_logs_tb/' + name    if args.tb_dir == "" else args.tb_dir
 
     if not os.path.exists(ckpt_dir_name): os.makedirs(ckpt_dir_name)
     if not os.path.exists(log_dir_name): os.makedirs(log_dir_name)
@@ -401,21 +415,25 @@ if __name__ == '__main__':
     with open(log_dir_name + '/configuration.txt', 'w+') as f:
         f.write(str(args) + '\n')
 
-    trainer = ReformerTrainer(dataset, 
-                              model, 
-                              tokenizer, 
-                              train_batch_size = 32, 
-                              eval_batch_size  = 32,
-                              tb_dir = tb_dir_name,
-                              log_dir = log_dir_name)
+    wrapper = PretrainingWrapper(dataset, 
+                                 model, 
+                                 tokenizer, 
+                                 train_batch_size = 32, 
+                                 eval_batch_size  = 32,
+                                 tb_dir = tb_dir_name,
+                                 log_dir = log_dir_name)
 
-    train_dataloader, eval_dataloader = trainer.build_dataloaders(train_test_split=0.90)
+    train_dataloader, eval_dataloader = wrapper.build_dataloaders(train_test_split=0.90)
 
-    model = trainer.train(epochs            = 100,
-                          train_dataloader  = train_dataloader,
-                          eval_dataloader   = eval_dataloader,
-                          log_steps         = 10,
-                          ckpt_steps        = 2000,
-                          ckpt_dir          = ckpt_dir_name)
+    if args.evaluate:
+        wrapper.evaluate(dataloader = eval_dataloader, ckpt_dir = ckpt_dir_name)
 
-    torch.save(model, ckpt_dir_name + '/model.bin')
+    else:
+        model = wrapper.train(epochs            = 100,
+                              train_dataloader  = train_dataloader,
+                              eval_dataloader   = eval_dataloader,
+                              log_steps         = 10,
+                              ckpt_steps        = 2000,
+                              ckpt_dir          = ckpt_dir_name)
+
+        torch.save(model, ckpt_dir_name + '/model.bin')
