@@ -367,6 +367,7 @@ if __name__ == '__main__':
     parser.add_argument('--causal', action='store_true')
     parser.add_argument('--tied_connections', action='store_true')
     parser.add_argument('--kmeans', action='store_true')
+    parser.add_argument('--full_attention', action='store_true')
 
     args = parser.parse_args()
 
@@ -385,6 +386,7 @@ if __name__ == '__main__':
         causal          = args.causal,
         recurrence      = args.tied_connections,
         k_means_hashing = args.kmeans,
+        use_full_attn   = args.use_full_attn
     )
 
     name = strftime("%a_%d_%b_%H-%M-%S", gmtime())

@@ -8,6 +8,7 @@ Arguments:
   - `causal`: whether to use an autoregressive model
   - `tied_connections`: whether to use tied connections in reversible layers
   - `kmeans`: whether to use k-means hashing
+  - `full_attention`: whether to use full attention
 
 To use with tensorboard on Azure:
 ```
