@@ -386,7 +386,7 @@ if __name__ == '__main__':
         causal          = args.causal,
         recurrence      = args.tied_connections,
         k_means_hashing = args.kmeans,
-        use_full_attn   = args.use_full_attn
+        use_full_attn   = args.full_attention
     )
 
     name = strftime("%a_%d_%b_%H-%M-%S", gmtime())
