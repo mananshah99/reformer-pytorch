@@ -1,4 +1,5 @@
 import sys
+from time import gmtime, strftime
 
 sys.path.append('../reformer_pytorch')
 
@@ -15,7 +16,7 @@ from reformer_lm_pytorch import ReformerLM
 
 from transformers import BertTokenizer, PreTrainedTokenizer
 from fairseq.optim.adafactor import Adafactor
-import os
+import os, os.path
 import json
 import logging
 from datetime import datetime
@@ -96,6 +97,9 @@ class ReformerTrainer(object):
         self.tb_writer = tb_writer
         self.log_dir = log_dir
 
+        if not os.path.exists(log_dir): os.makedirs(log_dir)
+        if not os.path.exists(tb_dir): os.makedirs(tb_dir)
+
         if tokenizer is None:
             self.tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 
@@ -109,7 +113,7 @@ class ReformerTrainer(object):
             from torch.utils.tensorboard import SummaryWriter
             self.writer = SummaryWriter(log_dir=tb_dir)
 
-        logging.basicConfig(filename=f'{log_dir}/{datetime.now().date()}.log', level=logging.INFO)
+        logging.basicConfig(filename=f'{log_dir}/{datetime.now().date()}.log', level=logging.INFO, filemode='w')
 
     def build_dataloaders(self, train_test_split=0.1, train_shuffle=True, eval_shuffle=True):
         """
@@ -213,6 +217,7 @@ class ReformerTrainer(object):
         step_loss = 0.0
 
         if ckpt_dir is not None:
+            if not os.path.exists(ckpt_dir): os.makedirs(ckpt_dir)
             assert os.path.isdir(ckpt_dir)
             try:
                 logging.info(f'{datetime.now()} | Continuing from checkpoint...')
@@ -360,20 +365,26 @@ if __name__ == '__main__':
         num_tokens=tokenizer.vocab_size,
         dim=512,
         depth=6,
-        heads=8,
+        heads=1,
         n_hashes=4,
         max_seq_len=tokenizer.max_len,
         causal=True,
         recurrence = True,
         k_means_hashing = True,
     )
-    trainer = ReformerTrainer(dataset, model, tokenizer, train_batch_size=32, eval_batch_size=32)
+
+    name = strftime("%a_%d_%b_%H-%M-%S", gmtime())
+
+    trainer = ReformerTrainer(dataset, model, tokenizer, train_batch_size=32, eval_batch_size=32,
+                              tb_dir = './pretrain_logs_tb/' + name,
+                              log_dir = './pretrain_logs/' + name)
+
     train_dataloader, eval_dataloader = trainer.build_dataloaders(train_test_split=0.90)
-    model = trainer.train(epochs=3,
+    model = trainer.train(epochs=100,
                           train_dataloader=train_dataloader,
                           eval_dataloader=eval_dataloader,
                           log_steps=10,
                           ckpt_steps=2000,
-                          ckpt_dir='./pretrain_ckpts',
+                          ckpt_dir='./pretrain_ckpts/' + name,
                           gradient_accumulation_steps=1)
-    torch.save(model, './pretrain_ckpts/model.bin')
+    torch.save(model, './pretrain_ckpts/' + name + '/model.bin')
