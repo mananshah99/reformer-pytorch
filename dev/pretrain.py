@@ -21,6 +21,8 @@ import json
 import logging
 from datetime import datetime
 
+import argparse
+
 class GutenbergDataset(Dataset):
 
     def __init__(self, path="", prefix="train"):
@@ -28,7 +30,7 @@ class GutenbergDataset(Dataset):
         assert os.path.isdir(path)
 
         self.documents = []
-        filename_list = os.listdir(path)
+        filename_list = sorted(os.listdir(path))
 
         MAX_DOCUMENTS = 500
 
@@ -358,28 +360,44 @@ class ReformerTrainer(object):
 
 
 if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser(description='Pretraining options.')
+    parser.add_argument('--max_len', type=int, default=128)
+    parser.add_argument('--n_hashes', type=int)
+    parser.add_argument('--causal', action='store_true')
+    parser.add_argument('--tied_connections', action='store_true')
+    parser.add_argument('--kmeans', action='store_true')
+
+    args = parser.parse_args()
+
     dataset = GutenbergDataset(path='../data/gutenberg/txt')
     tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
-    tokenizer.max_len = 128
+    
+    tokenizer.max_len = args.max_len
+    
     model = ReformerLM(
-        num_tokens=tokenizer.vocab_size,
-        dim=512,
-        depth=6,
-        heads=1,
-        n_hashes=4,
-        max_seq_len=tokenizer.max_len,
-        causal=True,
-        recurrence = True,
-        k_means_hashing = True,
+        num_tokens      = tokenizer.vocab_size,
+        dim             = 512,
+        depth           = 6,
+        heads           = 1,
+        n_hashes        = args.n_hashes,
+        max_seq_len     = tokenizer.max_len,
+        causal          = args.causal,
+        recurrence      = args.tied_connections,
+        k_means_hashing = args.kmeans,
     )
 
     name = strftime("%a_%d_%b_%H-%M-%S", gmtime())
+    
+    with open('./pretrain_logs/' + name + '/configuration.txt', 'w+') as f:
+        f.write(str(args) + '\n')
 
     trainer = ReformerTrainer(dataset, model, tokenizer, train_batch_size=32, eval_batch_size=32,
                               tb_dir = './pretrain_logs_tb/' + name,
                               log_dir = './pretrain_logs/' + name)
 
     train_dataloader, eval_dataloader = trainer.build_dataloaders(train_test_split=0.90)
+
     model = trainer.train(epochs=100,
                           train_dataloader=train_dataloader,
                           eval_dataloader=eval_dataloader,
@@ -387,4 +405,5 @@ if __name__ == '__main__':
                           ckpt_steps=2000,
                           ckpt_dir='./pretrain_ckpts/' + name,
                           gradient_accumulation_steps=1)
+
     torch.save(model, './pretrain_ckpts/' + name + '/model.bin')
