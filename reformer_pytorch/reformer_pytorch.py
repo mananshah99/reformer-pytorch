@@ -156,6 +156,7 @@ class LSHAttention(nn.Module):
         self.k_means_hashing = k_means_hashing
         self.n_heads = heads
         self.n_km_hashes = n_hashes
+        self.max_seq_len = max_seq_len
         self.bucket_means = nn.Parameter(
             torch.zeros(n_hashes,
                         heads,
@@ -227,38 +228,42 @@ class LSHAttention(nn.Module):
 
         buckets = None
         if self.k_means_hashing:
-            qk = qk.view(-1, self.n_heads, seqlen, dim)
-            #print(qk.shape)
-            #print(self.bucket_means.shape)
+            if seqlen != self.max_seq_len or batch_size % self.n_heads != 0: 
+                print("error: seq_len != max_seq_len or batch_size % self.n_heads != 0. reverting to hashing")
+                buckets = self.hash_vectors(n_buckets, qk)
+            else:
+                qk_t = F.normalize(qk.view(-1, self.n_heads, seqlen, dim), p=2, dim=-1)
+                #print(qk.shape)
+                #print(self.bucket_means.shape)
 
-            # qk shape: batch_size, n_heads, max_seq_len, dim // n_heads
-            # bucket_means shape: n_hashes, n_heads, max_seq_len // bucket_size (n_clusters), dim // n_heads
+                # qk shape: batch_size, n_heads, max_seq_len, dim // n_heads
+                # bucket_means shape: n_hashes, n_heads, max_seq_len // bucket_size (n_clusters), dim // n_heads
+                
+                # b = batch_size
+                # h = n_heads
+                # s = seqlen
+                # d = dim // n_heads
+                # q = n_hashes
+                # r = n_clusters
+                projected_vectors = torch.einsum('bhsd,qhrd->qbhsr', qk_t, self.bucket_means)
+                #print(projected_vectors[0, 0, 0, 0, :])
+                #print(projected_vectors.shape)
+                buckets_per_hash = torch.argmax(projected_vectors, dim=-1)
+                #print(buckets_per_hash[:, 0, 0, 0]) 
+                #print(buckets_per_hash.shape)
+                buckets = torch.mode(buckets_per_hash, dim=0)[0]
+                #print(buckets[0, 0, 0])
+                #print(buckets.shape)
+
+                if self.training:
+                    curr_clusters = F.one_hot(buckets_per_hash, projected_vectors.shape[-1]).float()
+                    per_cluster_mean = torch.einsum("bhsd,qbhsr->qhrd", qk_t, curr_clusters)
+                    per_cluster_mean = per_cluster_mean.reshape(self.n_km_hashes, self.n_heads, projected_vectors.shape[-1], dim)
+
+                    self.bucket_means = nn.Parameter(F.normalize(per_cluster_mean, p=2, dim=-1), requires_grad = False)
+
+                buckets = buckets.reshape(batch_size, -1)
             
-            # b = batch_size
-            # h = n_heads
-            # s = seqlen
-            # d = dim // n_heads
-            # q = n_hashes
-            # r = n_clusters
-            projected_vectors = torch.einsum('bhsd,qhrd->qbhsr', qk, self.bucket_means)
-            #print(projected_vectors[0, 0, 0, 0, :])
-            #print(projected_vectors.shape)
-            buckets_per_hash = torch.argmax(projected_vectors, dim=-1)
-            #print(buckets_per_hash[:, 0, 0, 0]) 
-            #print(buckets_per_hash.shape)
-            buckets = torch.mode(buckets_per_hash, dim=0)[0]
-            #print(buckets[0, 0, 0])
-            #print(buckets.shape)
-
-            if self.training:
-                curr_clusters = F.one_hot(buckets_per_hash, projected_vectors.shape[-1]).float()
-                per_cluster_mean = torch.einsum("bhsd,qbhsr->qhrd", qk, curr_clusters)
-                per_cluster_mean = per_cluster_mean.reshape(self.n_km_hashes, self.n_heads, projected_vectors.shape[-1], dim)
-
-                self.bucket_means = nn.Parameter(per_cluster_mean, requires_grad = False)
-
-            buckets = buckets.reshape(batch_size, -1)
-            qk = qk.view(batch_size, seqlen, dim)
         else:
             buckets = self.hash_vectors(n_buckets, qk)
 
