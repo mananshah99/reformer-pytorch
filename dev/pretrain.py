@@ -362,7 +362,7 @@ class ReformerTrainer(object):
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Pretraining options.')
-    parser.add_argument('--max_len', type=int, default=128)
+    parser.add_argument('--max_seq_len', type=int, default = 512)
     parser.add_argument('--n_hashes', type=int)
     parser.add_argument('--causal', action='store_true')
     parser.add_argument('--tied_connections', action='store_true')
@@ -373,7 +373,7 @@ if __name__ == '__main__':
     dataset = GutenbergDataset(path='../data/gutenberg/txt')
     tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
     
-    tokenizer.max_len = args.max_len
+    tokenizer.max_len = args.max_seq_len
     
     model = ReformerLM(
         num_tokens      = tokenizer.vocab_size,
@@ -381,29 +381,39 @@ if __name__ == '__main__':
         depth           = 6,
         heads           = 1,
         n_hashes        = args.n_hashes,
-        max_seq_len     = tokenizer.max_len,
+        max_seq_len     = args.max_seq_len,
         causal          = args.causal,
         recurrence      = args.tied_connections,
         k_means_hashing = args.kmeans,
     )
 
     name = strftime("%a_%d_%b_%H-%M-%S", gmtime())
-    
-    with open('./pretrain_logs/' + name + '/configuration.txt', 'w+') as f:
+    ckpt_dir_name = './pretrain_ckpts/' + name
+    log_dir_name  = './pretrain_logs/' + name
+    tb_dir_name   = './pretrain_logs_tb/' + name
+
+    if not os.path.exists(ckpt_dir_name): os.makedirs(ckpt_dir_name)
+    if not os.path.exists(log_dir_name): os.makedirs(log_dir_name)
+    if not os.path.exists(tb_dir_name): os.makedirs(tb_dir_name)
+
+    with open(log_dir_name + '/configuration.txt', 'w+') as f:
         f.write(str(args) + '\n')
 
-    trainer = ReformerTrainer(dataset, model, tokenizer, train_batch_size=32, eval_batch_size=32,
-                              tb_dir = './pretrain_logs_tb/' + name,
-                              log_dir = './pretrain_logs/' + name)
+    trainer = ReformerTrainer(dataset, 
+                              model, 
+                              tokenizer, 
+                              train_batch_size = 32, 
+                              eval_batch_size  = 32,
+                              tb_dir = tb_dir_name,
+                              log_dir = log_dir_name)
 
     train_dataloader, eval_dataloader = trainer.build_dataloaders(train_test_split=0.90)
 
-    model = trainer.train(epochs=100,
-                          train_dataloader=train_dataloader,
-                          eval_dataloader=eval_dataloader,
-                          log_steps=10,
-                          ckpt_steps=2000,
-                          ckpt_dir='./pretrain_ckpts/' + name,
-                          gradient_accumulation_steps=1)
+    model = trainer.train(epochs            = 100,
+                          train_dataloader  = train_dataloader,
+                          eval_dataloader   = eval_dataloader,
+                          log_steps         = 10,
+                          ckpt_steps        = 2000,
+                          ckpt_dir          = ckpt_dir_name)
 
-    torch.save(model, './pretrain_ckpts/' + name + '/model.bin')
+    torch.save(model, ckpt_dir_name + '/model.bin')
