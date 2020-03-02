@@ -1,5 +1,21 @@
 # cs224n entry points
 
+## `pretrain.py`: pretraining task runner
+
+Arguments:
+  - `max_seq_len`: maximum sequence length (default = 512)
+  - `n_hashes`: number of hashes (if k-means hashing, number of rerandomizations)
+  - `causal`: whether to use an autoregressive model
+  - `tied_connections`: whether to use tied connections in reversible layers
+  - `kmeans`: whether to use k-means hashing
+
+To use with tensorboard on Azure:
+```
+cd ~/reformer-pytorch/dev/
+tensorboard --logdir pretrain_logs_tb --port 6006 --bind_all
+```
+which can subsequently be accessed locally with `http://40.76.36.52:6006/`. 
+
 ## `glue.py`: GLUE task runner
 
 Arguments:
