@@ -16,6 +16,7 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
@@ -28,6 +29,17 @@ from transformers.data.metrics import glue_compute_metrics as compute_metrics
 from transformers.data.processors.glue import glue_convert_examples_to_features as convert_examples_to_features
 from transformers.data.processors.glue import glue_output_modes as output_modes
 from transformers.data.processors.glue import glue_processors as processors
+
+class FCSoftmax(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(MyModel, self).__init__()
+        self.fc = nn.Linear(input_dim, output_dim)
+        self.softmax = nn.Softmax()
+        
+    def forward(self, x):
+        x = self.fc(x)
+        x = self.softmax(x)
+        return x
 
 class TrainerGLUE(object):
 
@@ -44,10 +56,15 @@ class TrainerGLUE(object):
                  output_dir='./output_data',
                  data_dir='../data/glue',
                  fp16=False,
-                 fp16_opt_level=0):
+                 fp16_opt_level=0,
+                 num_tokens = None,
+                 output_dim = 2):
         self.seed = seed
         self.model_name_or_path = model_name_or_path
-        self.model = model
+
+        self.fc_layer = FCSoftmax(input_dim = num_tokens, output_dim = output_dim)
+        self.model = nn.Sequential(model, fc_layer)
+
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
         self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
@@ -377,9 +394,15 @@ parser = argparse.ArgumentParser(description='Main GLUE trainer')
 parser.add_argument('--tasks', default = None)
 
 parser.add_argument('--gpu', action='store_true')
-parser.add_argument('--max_seq_len', type=int, default = 2048)
-parser.add_argument('--recurrence', action='store_true')
-parser.add_argument('--lsh_attention', action='store_true')
+
+parser.add_argument('--max_seq_len', type=int, default = 512)
+parser.add_argument('--n_hashes', type=int)
+parser.add_argument('--causal', action='store_true')
+parser.add_argument('--tied_connections', action='store_true')
+parser.add_argument('--kmeans', action='store_true')
+parser.add_argument('--full_attention', action='store_true')
+
+parser.add_argument('--ckpt_dir', type=str, default = "")
 
 parser.add_argument('--num_train_epochs', type=int, default = 10)
 parser.add_argument('--num_eval_steps', type=int, default = 20)
@@ -391,20 +414,26 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 tokenizer.max_len = args.max_seq_len
 
 model = ReformerLM(
-    dim = 1024,
-    depth = 12,
-    max_seq_len = args.max_seq_len,
-    num_tokens = tokenizer.vocab_size,
-    heads = 8,
-    bucket_size = 64,
-    n_hashes = 4,
-    ff_chunks = 10,
-    lsh_dropout = 0.1,
-    weight_tie = False,
-    causal = True,
-    recurrence = args.recurrence,
-    use_full_attn = (not args.lsh_attention)
+    num_tokens      = tokenizer.vocab_size,
+    dim             = 512,
+    depth           = 6,
+    heads           = 1,
+    n_hashes        = args.n_hashes,
+    max_seq_len     = args.max_seq_len,
+    causal          = args.causal,
+    recurrence      = args.tied_connections,
+    k_means_hashing = args.kmeans,
+    use_full_attn   = args.full_attention
 ).to(device)
+
+if args.ckpt_dir is not "":
+    assert os.path.isdir(ckpt_dir)
+    try:
+        logging.info(f'{datetime.now()} | Continuing from checkpoint...')
+        self.model.load_state_dict(torch.load(f'{ckpt_dir}/model_state_dict.pt', map_location=self.device))
+
+    except Exception as e:
+        logging.info(f'{datetime.now()} | No checkpoint was found | {e}')
 
 # training on glue tasks
 for key in list(args.tasks.split(',')) if args.tasks is not None else processors.keys():
@@ -413,6 +442,13 @@ for key in list(args.tasks.split(',')) if args.tasks is not None else processors
     output_mode = output_modes[task_name]
     label_list = processor.get_labels()
     num_labels = len(label_list)
+
+    print(task_name)
+    print(processor)
+    print(output_mode)
+    print(label_list)
+    print(num_labels)
+    continue
 
     print("Training task " + task_name + " with output mode " + output_mode)
 
@@ -423,6 +459,7 @@ for key in list(args.tasks.split(',')) if args.tasks is not None else processors
         task=key,
         per_gpu_train_batch_size=8,
         per_gpu_eval_batch_size=8,
+        num_tokens = tokenizer.vocab_size
     )
 
     train_dataset = trainer.load_and_cache_examples(task_name, tokenizer)
