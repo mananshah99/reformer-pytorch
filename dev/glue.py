@@ -171,11 +171,12 @@ class TrainerGLUE(object):
 
                 self.model.train()
                 batch = tuple(t.to(self.device) for t in batch)
+                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
                 input_ids = batch[0]
                 attention_mask = batch[1]
                 token_type_ids = batch[2]
-                labels = batch[3]
+                labels = torch.tensor(batch[3], dtype=torch.long, device = device)
 
                 # probably only need to pass the input_ids, after we
                 # apply the masking ourselves
@@ -291,7 +292,7 @@ class TrainerGLUE(object):
 
                     outputs = model(input_ids)
                     outputs = torch.argmax(outputs, dim=-1).float()
-                    tmp_eval_loss = self.loss_fn(outputs, labels)
+                    tmp_eval_loss = self.loss_fn(outputs, labels.long())
                     eval_loss += tmp_eval_loss.mean().item()
 
                 nb_eval_steps += 1
@@ -390,8 +391,8 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 tokenizer.max_len = args.max_seq_len
 
 model = ReformerLM(
-    dim = 512,
-    depth = 6,
+    dim = 1024,
+    depth = 12,
     max_seq_len = args.max_seq_len,
     num_tokens = tokenizer.vocab_size,
     heads = 8,
@@ -399,8 +400,8 @@ model = ReformerLM(
     n_hashes = 4,
     ff_chunks = 10,
     lsh_dropout = 0.1,
-    weight_tie = True,
-    causal = False,
+    weight_tie = False,
+    causal = True,
     recurrence = args.recurrence,
     use_full_attn = (not args.lsh_attention)
 ).to(device)
