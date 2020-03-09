@@ -118,7 +118,7 @@ class ReversibleBlock(nn.Module):
             del y2, gy1
 
             dx1 = dy1 + y1.grad
-            del dy1
+            #del dy1
             y1.grad = None
 
         with torch.enable_grad():
@@ -132,16 +132,26 @@ class ReversibleBlock(nn.Module):
 
         with torch.enable_grad():
             x2.requires_grad = True
-
+            
             ### update to account for h
             hx2 = self.h(torch.cat([x1, x2], dim=-1), set_rng=True)
             torch.autograd.backward(hx2, dx1, retain_graph=True)
-
+            
         with torch.no_grad():
 
             dx2 = dy2 + x2.grad
             del dy2
             x2.grad = None
+       
+        with torch.enable_grad():
+            x1.requires_grad = True
+            hx2 = self.h(torch.cat([x1, x2], dim=-1), set_rng=True)
+            torch.autograd.backward(hx2, dy1, retain_graph=True)
+        
+        with torch.no_grad():
+
+            dx1 = dx1 + x1.grad
+            x1.grad = None            
 
             x = torch.cat([x1, x2.detach()], dim=2)
             dx = torch.cat([dx1, dx2], dim=2)

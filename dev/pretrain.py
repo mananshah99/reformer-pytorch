@@ -379,6 +379,7 @@ if __name__ == '__main__':
     parser.add_argument('--kmeans', action='store_true')
     parser.add_argument('--full_attention', action='store_true')
 
+    parser.add_argument('--name', type=str, default="")
     parser.add_argument('--ckpt_dir', type=str, default="")
     parser.add_argument('--log_dir', type=str, default="")
     parser.add_argument('--tb_dir', type=str, default="")
@@ -405,7 +406,7 @@ if __name__ == '__main__':
         use_full_attn   = args.full_attention
     )
 
-    name = strftime("%a_%d_%b_%H-%M-%S", gmtime())
+    name = strftime("%a_%d_%b_%H-%M-%S", gmtime())  if args.name == "" else args.name
     ckpt_dir_name = './pretrain_ckpts/' + name      if args.ckpt_dir == "" else args.ckpt_dir
     log_dir_name  = './pretrain_logs/' + name       if args.log_dir == "" else args.log_dir
     tb_dir_name   = './pretrain_logs_tb/' + name    if args.tb_dir == "" else args.tb_dir
