@@ -32,7 +32,7 @@ class GutenbergDataset(Dataset):
         self.documents = []
         filename_list = sorted(os.listdir(path))
 
-        MAX_DOCUMENTS = 500
+        MAX_DOCUMENTS = 300
 
         for file in filename_list:
             path_to_file = os.path.join(path, file)
@@ -245,7 +245,7 @@ class PretrainingWrapper(object):
                                     position=1,
                                     leave=True,
                                     total=len(train_dataloader)):
-                for data in tqdm(batch):
+                for data in tqdm(batch, desc='Batch Iterator'):
                     inputs = self._tokenize_input_ids(data, pad_to_max_length=True)
                     inputs, labels = self.mask_tokens(inputs)
                     inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -272,7 +272,7 @@ class PretrainingWrapper(object):
                     local_steps += 1
                     global_steps += 1
 
-                    if global_steps % log_steps == 0:
+                    if global_steps== 1 or global_steps % log_steps == 0:
                         if self.tb_writer:
                             self.writer.add_scalar('loss/train', step_loss / local_steps, global_steps)
                             self.writer.close()
@@ -285,13 +285,13 @@ class PretrainingWrapper(object):
                         step_loss = 0.0
                         local_steps = 0
 
-                    if global_steps % ckpt_steps == 0:
+                    if global_steps == 1 or global_steps % ckpt_steps == 0:
                         # evaluating before every checkpoint
-                        # self.evaluate(eval_dataloader)
+                        self.evaluate(eval_dataloader)
                         model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
-                        torch.save(model_to_save.state_dict(), f'{ckpt_dir}/model_state_dict.pt')
-                        torch.save(optimizer.state_dict(), f'{ckpt_dir}/optimizer_state_dict.pt')
-
+                        torch.save(model_to_save.state_dict(), f'{ckpt_dir}/model_state_dict_{global_steps}.pt')
+                        torch.save(optimizer.state_dict(), f'{ckpt_dir}/optimizer_state_dict_{global_steps}.pt')
+                        torch.save(model_to_save, f'{ckpt_dir}/model_{global_steps}.bin')
                         logging.info(f'{datetime.now()} | Saved checkpoint to: {ckpt_dir}')
 
         model_to_save = self.model.module if hasattr(self.model, 'module') else self.model
@@ -330,7 +330,7 @@ class PretrainingWrapper(object):
 
         logging.info(f'{datetime.now()} | Evaluating...')
         for step, batch in tqdm(enumerate(dataloader), desc='Evaluating', leave=True, total=len(dataloader)):
-            for data in tqdm(batch):
+            for data in tqdm(batch, desc='Batch Iterator'):
                 inputs = self._tokenize_input_ids(data, pad_to_max_length=True)
                 inputs, labels = self.mask_tokens(inputs)
                 inputs, labels = inputs.to(self.device), labels.to(self.device)
@@ -360,9 +360,9 @@ class PretrainingWrapper(object):
             perplexity /= eval_steps
 
             if self.tb_writer:
-                self.writer.add_scalar('Eval/Loss', eval_loss, eval_steps)
+                self.writer.add_scalar('loss/eval', eval_loss, eval_steps)
                 self.writer.close()
-                self.writer.add_scalar('Perplexity', perplexity, eval_steps)
+                self.writer.add_scalar('perplexity/eval', perplexity, eval_steps)
                 self.writer.close()
             logging.info(f'{datetime.now()} | Step: {step} | Eval Loss: {eval_loss} | Perplexity: {perplexity}')
 
@@ -421,8 +421,8 @@ if __name__ == '__main__':
     wrapper = PretrainingWrapper(dataset, 
                                  model, 
                                  tokenizer, 
-                                 train_batch_size = 32, 
-                                 eval_batch_size  = 32,
+                                 train_batch_size = 16, 
+                                 eval_batch_size  = 16,
                                  tb_dir = tb_dir_name,
                                  log_dir = log_dir_name)
 
@@ -436,7 +436,7 @@ if __name__ == '__main__':
                               train_dataloader  = train_dataloader,
                               eval_dataloader   = eval_dataloader,
                               log_steps         = 10,
-                              ckpt_steps        = 2000,
+                              ckpt_steps        = 1000,
                               ckpt_dir          = ckpt_dir_name)
 
         torch.save(model, ckpt_dir_name + '/model.bin')

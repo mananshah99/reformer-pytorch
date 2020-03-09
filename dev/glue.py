@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import random
-
+from datetime import datetime
 import numpy as np
 import torch
 import torch.nn as nn
@@ -32,7 +32,7 @@ from transformers.data.processors.glue import glue_processors as processors
 
 class FCSoftmax(nn.Module):
     def __init__(self, input_dim, output_dim):
-        super(MyModel, self).__init__()
+        super(FCSoftmax, self).__init__()
         self.fc = nn.Linear(input_dim, output_dim)
         self.softmax = nn.Softmax()
         
@@ -59,15 +59,15 @@ class TrainerGLUE(object):
                  fp16_opt_level=0,
                  num_tokens = None,
                  output_dim = 2):
+        self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self.seed = seed
         self.model_name_or_path = model_name_or_path
 
-        self.fc_layer = FCSoftmax(input_dim = num_tokens, output_dim = output_dim)
-        self.model = nn.Sequential(model, fc_layer)
+        self.fc_layer = FCSoftmax(input_dim = num_tokens, output_dim = output_dim).to(self.device)
+        self.model = nn.Sequential(model, self.fc_layer).to(self.device)
 
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
-        self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self.n_gpu = torch.cuda.device_count() if torch.cuda.is_available() else 0
 
         self.per_gpu_train_batch_size = per_gpu_train_batch_size
@@ -188,12 +188,11 @@ class TrainerGLUE(object):
 
                 self.model.train()
                 batch = tuple(t.to(self.device) for t in batch)
-                device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
                 input_ids = batch[0]
                 attention_mask = batch[1]
                 token_type_ids = batch[2]
-                labels = torch.tensor(batch[3], dtype=torch.long, device = device)
+                labels = torch.tensor(batch[3], dtype=torch.long, device = self.device)
 
                 # probably only need to pass the input_ids, after we
                 # apply the masking ourselves
@@ -427,11 +426,11 @@ model = ReformerLM(
 ).to(device)
 
 if args.ckpt_dir is not "":
-    assert os.path.isdir(ckpt_dir)
+    assert os.path.isdir(args.ckpt_dir)
     try:
         logging.info(f'{datetime.now()} | Continuing from checkpoint...')
-        self.model.load_state_dict(torch.load(f'{ckpt_dir}/model_state_dict.pt', map_location=self.device))
-
+        model.load_state_dict(torch.load(f'{ckpt_dir}/model_state_dict.pt', map_location=device))
+        print('Model loaded!')
     except Exception as e:
         logging.info(f'{datetime.now()} | No checkpoint was found | {e}')
 
@@ -443,13 +442,6 @@ for key in list(args.tasks.split(',')) if args.tasks is not None else processors
     label_list = processor.get_labels()
     num_labels = len(label_list)
 
-    print(task_name)
-    print(processor)
-    print(output_mode)
-    print(label_list)
-    print(num_labels)
-    continue
-
     print("Training task " + task_name + " with output mode " + output_mode)
 
     trainer = TrainerGLUE(
@@ -457,9 +449,10 @@ for key in list(args.tasks.split(',')) if args.tasks is not None else processors
         max_seq_len=args.max_seq_len,
         tokenizer=tokenizer,
         task=key,
-        per_gpu_train_batch_size=8,
+        per_gpu_train_batch_size=32,
         per_gpu_eval_batch_size=8,
-        num_tokens = tokenizer.vocab_size
+        num_tokens = tokenizer.vocab_size,
+        output_dim = num_labels
     )
 
     train_dataset = trainer.load_and_cache_examples(task_name, tokenizer)
